@@ -3,7 +3,6 @@
 # <imports_and_config>
 import os
 from azure.ai.projects import AIProjectClient
-from azure.ai.projects.models import ConnectionType
 from azure.identity import DefaultAzureCredential
 from azure.core.credentials import AzureKeyCredential
 from azure.search.documents import SearchClient
@@ -13,23 +12,22 @@ from config import get_logger
 # initialize logging object
 logger = get_logger(__name__)
 
-# create a project client using environment variables loaded from the .env file
-project = AIProjectClient.from_connection_string(
-    conn_str=os.environ["AIPROJECT_CONNECTION_STRING"], credential=DefaultAzureCredential()
+# create a project client using the project endpoint loaded from the .env file
+project = AIProjectClient(
+    endpoint=os.environ["PROJECT_ENDPOINT"], credential=DefaultAzureCredential()
 )
 
 # create a vector embeddings client that will be used to generate vector embeddings
 embeddings = project.inference.get_embeddings_client()
 
-# use the project client to get the default search connection
-search_connection = project.connections.get_default(
-    connection_type=ConnectionType.AZURE_AI_SEARCH, include_credentials=True
-)
+# read the Azure AI Search endpoint and key from the .env file
+search_endpoint = os.environ["SEARCH_ENDPOINT"]
+search_key = os.environ["SEARCH_KEY"]
 
-# Create a search index client using the search connection
+# Create a search index client using the search endpoint and key
 # This client will be used to create and delete search indexes
 index_client = SearchIndexClient(
-    endpoint=search_connection.endpoint_url, credential=AzureKeyCredential(key=search_connection.key)
+    endpoint=search_endpoint, credential=AzureKeyCredential(search_key)
 )
 # </imports_and_config>
 
@@ -53,6 +51,7 @@ from azure.search.documents.indexes.models import (
     ExhaustiveKnnParameters,
     VectorSearchProfile,
     SearchIndex,
+    CorsOptions,
 )
 
 
@@ -126,11 +125,15 @@ def create_index_definition(index_name: str, model: str) -> SearchIndex:
     semantic_search = SemanticSearch(configurations=[semantic_config])
 
     # Create the search index definition
+    # CORS is enabled so browser-based front-ends (for example, the Rayfin app in
+    # the deployment module) can query the index directly. Restrict allowed_origins
+    # to your app's origin in production.
     return SearchIndex(
         name=index_name,
         fields=fields,
         semantic_search=semantic_search,
         vector_search=vector_search,
+        cors_options=CorsOptions(allowed_origins=["*"], max_age_in_seconds=300),
     )
 
 
@@ -180,9 +183,9 @@ def create_index_from_csv(index_name, csv_file):
 
     # Add the documents to the index using the Azure AI Search client
     search_client = SearchClient(
-        endpoint=search_connection.endpoint_url,
+        endpoint=search_endpoint,
         index_name=index_name,
-        credential=AzureKeyCredential(key=search_connection.key),
+        credential=AzureKeyCredential(search_key),
     )
 
     search_client.upload_documents(docs)
