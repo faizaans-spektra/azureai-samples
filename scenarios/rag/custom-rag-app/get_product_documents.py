@@ -15,26 +15,24 @@ from config import ASSET_PATH, get_logger
 logger = get_logger(__name__)
 tracer = trace.get_tracer(__name__)
 
-# create a project client using environment variables loaded from the .env file
-project = AIProjectClient.from_connection_string(
-    conn_str=os.environ["AIPROJECT_CONNECTION_STRING"], credential=DefaultAzureCredential()
+project = AIProjectClient(
+    endpoint=os.environ["PROJECT_ENDPOINT"],
+    credential=DefaultAzureCredential(),
 )
 
-# create a vector embeddings client that will be used to generate vector embeddings
-chat = project.inference.get_chat_completions_client()
-embeddings = project.inference.get_embeddings_client()
+aoai_client = project.inference.get_azure_openai_client(
+    api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-10-21")
+)
 
 # use the project client to get the default search connection
 search_connection = project.connections.get_default(
     connection_type=ConnectionType.AZURE_AI_SEARCH, include_credentials=True
 )
 
-# Create a search index client using the search connection
-# This client will be used to create and delete search indexes
 search_client = SearchClient(
     index_name=os.environ["AISEARCH_INDEX_NAME"],
-    endpoint=search_connection.endpoint_url,
-    credential=AzureKeyCredential(key=search_connection.key),
+    endpoint=search_connection.target,
+    credential=AzureKeyCredential(key=search_connection.credentials.api_key),
 )
 # </imports_and_config>
 
@@ -54,7 +52,10 @@ def get_product_documents(messages: list, context: dict = None) -> dict:
     # generate a search query from the chat messages
     intent_prompty = PromptTemplate.from_prompty(Path(ASSET_PATH) / "intent_mapping.prompty")
 
-    intent_mapping_response = chat.complete(
+    # CHANGE 4 (consequence of Change 2): call .chat.completions.create() on the
+    # AzureOpenAI client instead of .complete() on the old dedicated ChatCompletionsClient.
+    # Message format and response shape (.choices[0].message.content) are unchanged.
+    intent_mapping_response = aoai_client.chat.completions.create(
         model=os.environ["INTENT_MAPPING_MODEL"],
         messages=intent_prompty.create_messages(conversation=messages),
         **intent_prompty.parameters,
@@ -63,8 +64,10 @@ def get_product_documents(messages: list, context: dict = None) -> dict:
     search_query = intent_mapping_response.choices[0].message.content
     logger.debug(f"🧠 Intent mapping: {search_query}")
 
-    # generate a vector representation of the search query
-    embedding = embeddings.embed(model=os.environ["EMBEDDINGS_MODEL"], input=search_query)
+    # CHANGE 5 (consequence of Change 2): call .embeddings.create() on the
+    # AzureOpenAI client instead of .embed() on the old dedicated EmbeddingsClient.
+    # Response shape (.data[0].embedding) is unchanged.
+    embedding = aoai_client.embeddings.create(model=os.environ["EMBEDDINGS_MODEL"], input=search_query)
     search_vector = embedding.data[0].embedding
 
     # search the index for products matching the search query
