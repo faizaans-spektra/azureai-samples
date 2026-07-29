@@ -13,15 +13,15 @@ from config import get_logger
 # initialize logging object
 logger = get_logger(__name__)
 
-# create a project client using environment variables loaded from the .env file
-project = AIProjectClient.from_connection_string(
-    conn_str=os.environ["AIPROJECT_CONNECTION_STRING"], credential=DefaultAzureCredential()
+project = AIProjectClient(
+    endpoint=os.environ["PROJECT_ENDPOINT"],
+    credential=DefaultAzureCredential(),
 )
 
-# create a vector embeddings client that will be used to generate vector embeddings
-embeddings = project.inference.get_embeddings_client()
+aoai_client = project.inference.get_azure_openai_client(
+    api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-10-21")
+)
 
-# use the project client to get the default search connection
 search_connection = project.connections.get_default(
     connection_type=ConnectionType.AZURE_AI_SEARCH, include_credentials=True
 )
@@ -29,7 +29,8 @@ search_connection = project.connections.get_default(
 # Create a search index client using the search connection
 # This client will be used to create and delete search indexes
 index_client = SearchIndexClient(
-    endpoint=search_connection.endpoint_url, credential=AzureKeyCredential(key=search_connection.key)
+    endpoint=search_connection.target,
+    credential=AzureKeyCredential(key=search_connection.credentials.api_key),
 )
 # </imports_and_config>
 
@@ -148,7 +149,12 @@ def create_docs_from_csv(path: str, content_column: str, model: str) -> list[dic
         id = str(product["id"])
         title = product["name"]
         url = f"/products/{title.lower().replace(' ', '-')}"
-        emb = embeddings.embed(input=content, model=model)
+
+        # CHANGE 4 (consequence of Change 2): call .embeddings.create() on the
+        # AzureOpenAI client instead of .embed() on the old dedicated EmbeddingsClient.
+        # The response shape (.data[0].embedding) is identical, so nothing downstream
+        # needs to change.
+        emb = aoai_client.embeddings.create(input=content, model=model)
         rec = {
             "id": id,
             "content": content,
@@ -180,9 +186,9 @@ def create_index_from_csv(index_name, csv_file):
 
     # Add the documents to the index using the Azure AI Search client
     search_client = SearchClient(
-        endpoint=search_connection.endpoint_url,
+        endpoint=search_connection.target,
         index_name=index_name,
-        credential=AzureKeyCredential(key=search_connection.key),
+        credential=AzureKeyCredential(key=search_connection.credentials.api_key),
     )
 
     search_client.upload_documents(docs)
