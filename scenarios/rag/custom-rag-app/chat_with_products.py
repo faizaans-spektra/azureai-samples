@@ -9,18 +9,18 @@ from azure.identity import DefaultAzureCredential
 from config import ASSET_PATH, get_logger, enable_telemetry
 from get_product_documents import get_product_documents
 
-
 # initialize logging and tracing objects
 logger = get_logger(__name__)
 tracer = trace.get_tracer(__name__)
 
-# create a project client using environment variables loaded from the .env file
-project = AIProjectClient.from_connection_string(
-    conn_str=os.environ["AIPROJECT_CONNECTION_STRING"], credential=DefaultAzureCredential()
+project = AIProjectClient(
+    endpoint=os.environ["PROJECT_ENDPOINT"],
+    credential=DefaultAzureCredential(),
 )
 
-# create a chat client we can use for testing
-chat = project.inference.get_chat_completions_client()
+chat = project.inference.get_azure_openai_client(
+    api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-10-21")
+)
 # </imports_and_config>
 
 # <chat_function>
@@ -38,11 +38,13 @@ def chat_with_products(messages: list, context: dict = None) -> dict:
     grounded_chat_prompt = PromptTemplate.from_prompty(Path(ASSET_PATH) / "grounded_chat.prompty")
 
     system_message = grounded_chat_prompt.create_messages(documents=documents, context=context)
-    response = chat.complete(
+
+    response = chat.chat.completions.create(
         model=os.environ["CHAT_MODEL"],
         messages=system_message + messages,
         **grounded_chat_prompt.parameters,
     )
+
     logger.info(f"💬 Response: {response.choices[0].message}")
 
     # Return a chat protocol compliant response
@@ -69,6 +71,7 @@ if __name__ == "__main__":
         help="Enable sending telemetry back to the project",
     )
     args = parser.parse_args()
+
     if args.enable_telemetry:
         enable_telemetry(True)
 
